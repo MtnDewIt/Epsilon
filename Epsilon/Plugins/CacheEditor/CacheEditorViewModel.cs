@@ -1,17 +1,20 @@
 ﻿using CacheEditor.Components.TagExplorer.Commands;
 using CacheEditor.Components.TagTree;
+using CacheEditor.RTE;
 using CacheEditor.TagEditing.Messages;
 using CacheEditor.ViewModels;
 using EpsilonLib.Commands;
 using EpsilonLib.Dialogs;
 using EpsilonLib.Logging;
 using EpsilonLib.Settings;
+using EpsilonLib.Shell;
 using EpsilonLib.Shell.TreeModels;
 using Microsoft.Win32;
 using Shared;
 using Stylet;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
@@ -55,13 +58,20 @@ namespace CacheEditor
             TagTree.ContextMenu = Components.TagExplorer.MenuDefinitions.ContextMenu;
             TagTree.NodeDoubleClicked += TagTree_ItemDoubleClicked;
             CloseCommand = new DelegateCommand(Close);
+            CopyFullPath = new DelegateCommand(CopyPath);
+            OpenContainingFolder = new DelegateCommand(OpenFolder);
+
+            RteSession = _cacheEditingService.Rte.CreateSession(cacheFile);
         }
 
         public ICacheFile CacheFile { get; }
+        public IRteSession RteSession { get; private set; }
         public IDictionary<string, object> PluginStorage { get; } = new Dictionary<string, object>();
         public IObservableCollection<IScreen> Documents => Items;
         public IObservableCollection<ICacheEditorTool> Tools { get; } = new BindableCollection<ICacheEditorTool>();
         public ICommand CloseCommand { get; }
+        public ICommand CopyFullPath { get; }
+        public ICommand OpenContainingFolder { get; }
         public TagTreeViewModel TagTree { get; set; }
         public event EventHandler CurrentTagChanged;
         public CachedTag CurrentTag => (ActiveItem as TagEditorViewModel)?.Tag;
@@ -122,7 +132,7 @@ namespace CacheEditor
                 {
                     CacheEditor = this,
                     DefinitionData = futureDefinitionData,
-                    Instance = instance
+                    Instance = instance,
                 };
 
                 ActiveItem = new TagEditorViewModel(_cacheEditingService, context);
@@ -189,6 +199,8 @@ namespace CacheEditor
             _cacheEditingService?.Dispose();
             _cacheEditingService = null;
             PluginStorage?.Clear();
+            RteSession?.Dispose();
+            RteSession = null;
             CloseAllPanes();
         }
 
@@ -208,6 +220,18 @@ namespace CacheEditor
             RequestClose();
         }
 
+        public void CopyPath()
+        {
+            if (CacheFile?.File is not null)
+                ClipboardEx.SetTextSafe($"{CacheFile.File.FullName}");
+        }
+
+        public void OpenFolder()
+        {
+            if (CacheFile?.File is not null)
+                Process.Start("explorer.exe", CacheFile.File.Directory?.FullName);
+        }
+
         private void ShowTool(ICacheEditorTool tool, bool activate = false)
         {
             if (!Tools.Contains(tool))
@@ -225,9 +249,9 @@ namespace CacheEditor
 
         ITagTree ICacheEditor.TagTree => TagTree;
 
-        CachedTag ICacheEditor.RunBrowseTagDialog()
+        CachedTag ICacheEditor.RunBrowseTagDialog(BrowseTagOptions options)
         {
-            var vm = new BrowseTagDialogViewModel(_cacheEditingService, _cacheFile);
+            var vm = new BrowseTagDialogViewModel(_cacheEditingService, _cacheFile, options);
             if (_shell.ShowDialog(vm) == true)
             {
                 return vm.TagTree.SelectedNode.Tag as CachedTag;
@@ -404,7 +428,7 @@ namespace CacheEditor
                 using (var stream = CacheFile.Cache.OpenCacheRead())
                 {
                     var data = CacheFile.Cache.Deserialize(stream, CurrentTag);
-                    tagEditor.PostMessage(this, new DefinitionDataChangedEvent(data));
+                    tagEditor.PostMessage(this, new DefinitionDataChangedEvent(data) { WasReloaded = true });
                 }
             }
         }
@@ -432,9 +456,6 @@ namespace CacheEditor
             else
                 return true;
         }
-
-
-        public MessageBox asdfj;
 
         #endregion
     }
